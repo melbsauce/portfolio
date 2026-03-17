@@ -422,6 +422,21 @@ canvas{display:block;width:100%!important}
 .snap-chg.pos{color:var(--g)}
 .snap-chg.neg{color:var(--rd)}
 .snap-del{background:none;border:none;color:var(--t3);cursor:pointer;font-size:16px;padding:0 0 0 8px;line-height:1}
+/* === QUESTRADE CONNECT PANEL === */
+.qt-panel{background:var(--surf2);border:1px solid var(--b);border-radius:var(--r-md);padding:12px 14px;margin-bottom:12px}
+.qt-status-row{display:flex;align-items:center;gap:8px}
+.qt-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;transition:background .3s}
+.qt-dot.on{background:var(--g);box-shadow:0 0 6px var(--g)}
+.qt-dot.off{background:var(--rd)}
+.qt-dot.loading{background:var(--am);animation:pulse 1s ease-in-out infinite}
+.qt-status-txt{font-family:'DM Mono',monospace;font-size:12px;color:var(--t2);flex:1}
+.qt-sync-btn{background:var(--gd);border:1px solid rgba(184,240,154,0.3);border-radius:var(--r-sm);color:var(--g);padding:4px 12px;cursor:pointer;font-family:'DM Mono',monospace;font-size:11px;margin-left:auto}
+.qt-sync-btn:disabled{opacity:0.5;cursor:wait}
+.qt-form{margin-top:10px}
+.qt-inp{width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--b);border-radius:var(--r-sm);padding:8px 10px;color:var(--t1);font-family:'DM Mono',monospace;font-size:11px;outline:none;margin-bottom:8px}
+.qt-inp:focus{border-color:var(--g)}
+.qt-connect-btn{background:var(--gd);border:1px solid rgba(184,240,154,0.3);border-radius:var(--r-sm);color:var(--g);padding:6px 16px;cursor:pointer;font-family:'DM Mono',monospace;font-size:12px}
+.qt-hint{font-family:'DM Mono',monospace;font-size:10px;color:var(--t3);margin-top:6px}
 </style>
 </head>
 <body>
@@ -515,6 +530,21 @@ canvas{display:block;width:100%!important}
   <div class="bnr bnr-a" id="bnr-cash">&#128176; <strong id="bnr-cv">$0</strong> idle &mdash; cash earns nothing in Questrade.</div>
   <div class="bnr bnr-g" id="bnr-buy"></div>
   <div class="bnr bnr-a" id="bnr-stale">⏰ <span id="bnr-stale-txt"></span></div>
+
+  <!-- QUESTRADE CONNECT PANEL -->
+  <div class="qt-panel" id="qt-panel">
+    <div class="qt-status-row">
+      <div class="qt-dot off" id="qt-dot"></div>
+      <span class="qt-status-txt" id="qt-status-txt">Not connected to Questrade</span>
+      <button class="qt-sync-btn" id="qt-sync-btn" onclick="syncQuestrade()" style="display:none">&#8635; Sync</button>
+    </div>
+    <div class="qt-form" id="qt-form">
+      <input class="qt-inp" type="password" id="qt-token-inp" placeholder="Paste your Questrade refresh token here&hellip;" autocomplete="off">
+      <button class="qt-connect-btn" onclick="connectQuestrade()">Connect Questrade</button>
+      <div class="qt-hint">Questrade &rarr; App Hub &rarr; Generate new token &rarr; paste above</div>
+    </div>
+  </div>
+
   <div class="card">
     <div class="card-hdr">
       <span class="ctitle">Holdings <button class="ib" aria-label="More info" onclick="toggleIp('ip-h')">?</button></span>
@@ -753,6 +783,13 @@ canvas{display:block;width:100%!important}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
 const KEY='cpv6';
+
+// ── WORKER CONFIG ──────────────────────────────────────────
+// Fill in YOUR APP_SECRET from Cloudflare (Settings → Variables → APP_SECRET)
+const WORKER_URL='https://square-bar-0052.connormelber.workers.dev';
+const APP_SECRET='connor-portfolio-2026-xK9m';
+// ──────────────────────────────────────────────────────────
+
 const COL=['#b8f09a','#79b8ff','#f5c842','#c4a0ff','#4de8c8','#ff9f6a','#ff7070'];
 const GCOLS=[{bar:'#b8f09a',pct:'var(--g)'},{bar:'#79b8ff',pct:'var(--bl)'},{bar:'#c4a0ff',pct:'var(--pu)'},{bar:'#4de8c8',pct:'var(--tl)'}];
 
@@ -1328,6 +1365,160 @@ function doAsk(){
 }
 
 // =============================================
+// WORKER API HELPERS
+// =============================================
+function workerReady(){return WORKER_URL&&APP_SECRET&&APP_SECRET!=='YOUR_APP_SECRET_HERE';}
+
+async function workerFetch(path,opts){
+  return fetch(WORKER_URL+path,Object.assign({},opts,{
+    headers:Object.assign({'Content-Type':'application/json','X-App-Secret':APP_SECRET},(opts&&opts.headers)||{})
+  }));
+}
+
+function setQtConnected(on){
+  var dot=document.getElementById('qt-dot');
+  var txt=document.getElementById('qt-status-txt');
+  var form=document.getElementById('qt-form');
+  var btn=document.getElementById('qt-sync-btn');
+  if(!dot)return;
+  if(on){
+    dot.className='qt-dot on';
+    if(txt)txt.textContent='Connected to Questrade';
+    if(form)form.style.display='none';
+    if(btn)btn.style.display='inline-block';
+  } else {
+    dot.className='qt-dot off';
+    if(txt)txt.textContent='Not connected to Questrade';
+    if(form)form.style.display='block';
+    if(btn)btn.style.display='none';
+  }
+}
+
+async function checkWorkerStatus(){
+  if(!workerReady())return;
+  try{
+    var res=await workerFetch('/api/status');
+    var data=await res.json();
+    setQtConnected(!!data.connected);
+    if(data.connected)fetchPrices();
+  }catch(e){}
+}
+
+async function connectQuestrade(){
+  var inp=document.getElementById('qt-token-inp');
+  var token=(inp&&inp.value||'').trim();
+  if(!token){if(inp)inp.focus();return;}
+  var dot=document.getElementById('qt-dot');
+  var txt=document.getElementById('qt-status-txt');
+  if(dot)dot.className='qt-dot loading';
+  if(txt)txt.textContent='Connecting\u2026';
+  try{
+    var res=await workerFetch('/api/qt/connect',{
+      method:'POST',
+      body:JSON.stringify({refreshToken:token})
+    });
+    var data=await res.json();
+    if(data.ok||data.connected){
+      setQtConnected(true);
+      if(inp)inp.value='';
+      syncQuestrade();
+    } else {
+      if(dot)dot.className='qt-dot off';
+      if(txt)txt.textContent='Connection failed \u2014 check your token';
+    }
+  }catch(e){
+    if(dot)dot.className='qt-dot off';
+    if(txt)txt.textContent='Network error \u2014 check Worker URL';
+  }
+}
+
+async function fetchPrices(){
+  if(!workerReady())return;
+  var tickers=S.holdings.map(function(h){return h.ticker;}).filter(Boolean);
+  if(!tickers.length)return;
+  try{
+    var res=await workerFetch('/api/prices?t='+encodeURIComponent(tickers.join(',')));
+    if(!res.ok)return;
+    var prices=await res.json();
+    var updated=false;
+    S.holdings.forEach(function(h){
+      var p=prices[h.ticker];
+      if(p&&p.price){
+        h.marketValue=parseFloat((h.shares*p.price).toFixed(2));
+        h.currentPrice=p.price;
+        h.priceChange=p.change||0;
+        h.changePct=p.changePct||0;
+        h.updated=today();
+        updated=true;
+      }
+    });
+    if(updated){
+      save();renderHoldings();renderStats();
+      var stale=document.getElementById('bnr-stale');
+      if(stale)stale.classList.remove('show');
+      var txt=document.getElementById('qt-status-txt');
+      if(txt&&txt.textContent.indexOf('Syncing')<0){
+        var t=new Date().toLocaleTimeString('en-CA',{hour:'2-digit',minute:'2-digit'});
+        txt.textContent='Prices updated '+t;
+      }
+    }
+  }catch(e){}
+}
+
+async function syncQuestrade(){
+  if(!workerReady())return;
+  var btn=document.getElementById('qt-sync-btn');
+  var txt=document.getElementById('qt-status-txt');
+  var dot=document.getElementById('qt-dot');
+  if(btn)btn.disabled=true;
+  if(dot)dot.className='qt-dot loading';
+  if(txt)txt.textContent='Syncing\u2026';
+  try{
+    var res=await workerFetch('/api/qt/sync');
+    if(!res.ok){
+      setQtConnected(false);
+      if(btn)btn.disabled=false;
+      return;
+    }
+    var data=await res.json();
+    var positions=(data.positions&&data.positions.positions)||[];
+    positions.forEach(function(pos){
+      var existing=S.holdings.find(function(h){
+        return h.ticker===pos.symbol||h.ticker===pos.symbol+'.TO'||pos.symbol===h.ticker.replace('.TO','');
+      });
+      if(existing){
+        existing.shares=pos.openQuantity||existing.shares;
+        existing.marketValue=pos.currentMarketValue||existing.marketValue;
+        existing.currentPrice=pos.currentPrice||existing.currentPrice;
+        existing.avgCost=pos.averageEntryPrice||existing.avgCost;
+        existing.updated=today();
+      }
+    });
+    var accounts=(data.balances&&data.balances.accounts)||[];
+    accounts.forEach(function(acct){
+      (acct.combined||[]).forEach(function(bal){
+        if(bal.currency==='CAD'&&bal.cash!=null){
+          S.cash=parseFloat(bal.cash.toFixed(2));
+        }
+      });
+    });
+    save();renderHoldings();renderStats();
+    if(dot)dot.className='qt-dot on';
+    var t=new Date().toLocaleTimeString('en-CA',{hour:'2-digit',minute:'2-digit'});
+    if(txt)txt.textContent='Synced '+t;
+    if(btn){btn.disabled=false;}
+    fetchPrices();
+  }catch(e){
+    if(dot)dot.className='qt-dot off';
+    if(txt)txt.textContent='Sync error \u2014 reconnect Questrade';
+    if(btn)btn.disabled=false;
+  }
+}
+
+// Auto-refresh prices every 15 minutes
+setInterval(function(){if(workerReady())fetchPrices();},15*60*1000);
+
+// =============================================
 // ETF / STOCK DATABASE
 // =============================================
 const DB=[
@@ -1692,6 +1883,7 @@ updateStreak();
 renderAll();
 renderLog();
 buildLearn();
+checkWorkerStatus();
 
 // Tab scroll indicator
 const tabsEl = document.querySelector('.tabs');
